@@ -1,0 +1,26 @@
+import { Injectable, Logger } from "@nestjs/common";
+import { Cron, CronExpression } from "@nestjs/schedule";
+import { InjectRepository } from "@nestjs/typeorm";
+import { LessThan, Repository } from "typeorm";
+import { ResetTokenEntity } from "./auth/entities/reset-token.entity";
+
+@Injectable()
+export class CronService {
+    private readonly logger = new Logger(CronService.name);
+
+    constructor(
+        @InjectRepository(ResetTokenEntity)
+        private readonly resetRepo: Repository<ResetTokenEntity>,
+    ) { }
+
+    // раз в час удаляем все просроченные reset-токены ОДНИМ запросом
+    @Cron(CronExpression.EVERY_HOUR)
+    async cleanExpiredTokens() {
+        const result = await this.resetRepo.delete({
+            pass_token_expired_at: LessThan(new Date()),
+        });
+        if (result.affected) {
+            this.logger.log(`Удалено просроченных reset-токенов: ${result.affected}`);
+        }
+    }
+}
