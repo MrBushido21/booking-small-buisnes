@@ -132,7 +132,8 @@ describe('AuthService', () => {
 
       expect(matchPasswordMock).toHaveBeenCalledWith('secret', 'hash');
       expect(dataSource.transaction).toHaveBeenCalled();
-      expect(result).toEqual(tokens);
+      // login возвращает токены + auth_id (нужен для master_login)
+      expect(result).toEqual({ ...tokens, auth_id: '1' });
     });
   });
 

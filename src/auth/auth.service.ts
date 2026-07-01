@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { AuthEntity } from './entities/auth.entity';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, EntityManager, Repository } from 'typeorm';
 import { RefreshTokenEntity } from './entities/refresh-token.entity';
 import { ResetTokenEntity } from './entities/reset-token.entity';
 import { hashPassword, matchPassword } from '../utils/utils';
@@ -50,14 +50,26 @@ export class AuthService {
     return { accessToken, refreshToken }
   }
 
+  async createMaster(email: string, password: string, manager: EntityManager) {
+    const repo = manager.getRepository(AuthEntity)
+    const existing = await repo.findOne({ where: { email } })
+    if (existing) throw new ConflictException('Пользователь с таким email уже существует')
+    const hashed = await hashPassword(password)
+    return await repo.save(repo.create({ email, password: hashed, role: 'master' }))
+  }
+
   async login(body: LoginDto) {
     const user = await this.authRepo.findOne({ where: { email: body.email } })
     if (!user) throw new UnauthorizedException("Неверный логин или пароль")
     const matchPass = await matchPassword(body.password, user.password)
     if (!matchPass) throw new UnauthorizedException("Неверный логин или пароль")
-
+    
     const { accessToken, refreshToken } = await this.createAndSaveTokens(user.id, user.email, "transaction")
-    return { accessToken, refreshToken }
+    if (user.role === "owner") {
+      return { accessToken, refreshToken }
+    } else {
+      return { accessToken, refreshToken, auth_id: user.id }
+    }
   }
 
   async changePassword(body: ChangePasswordDto, user: AuthEntity) {
@@ -117,15 +129,15 @@ export class AuthService {
     return { accessToken, refreshToken }
   }
 
-  async refreshToken(token:string) {
+  async refreshToken(token: string) {
     try {
-       const payload = await this.jwtService.verifyRefresh(token);
-       const { accessToken, refreshToken } = await this.createAndSaveTokens(payload.sub, payload.email, "transaction")
-       return { accessToken, refreshToken }
+      const payload = await this.jwtService.verifyRefresh(token);
+      const { accessToken, refreshToken } = await this.createAndSaveTokens(payload.sub, payload.email, "transaction")
+      return { accessToken, refreshToken }
     } catch (error) {
       throw new UnauthorizedException('Refresh-токен невалиден или истёк');
     }
-    
+
   }
 
 }

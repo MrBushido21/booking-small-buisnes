@@ -6,6 +6,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CronModule } from './cron.module';
+import { BuisnesModule } from './buisnes/buisnes.module';
 
 @Module({
   imports: [
@@ -14,6 +15,7 @@ import { CronModule } from './cron.module';
     ScheduleModule.forRoot(),
     AuthModule,
     CronModule,
+    BuisnesModule,
   ],
   providers: [
     // вешаем ThrottlerGuard на ВСЕ роуты приложения

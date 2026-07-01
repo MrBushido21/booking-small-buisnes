@@ -1,12 +1,17 @@
 import { NestFactory } from '@nestjs/core';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import cookieParser from 'cookie-parser'
+import { join } from 'path';
 import { AllExceptionsFilter } from './common/all-exceptions.filter';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // отдаём загруженные файлы: /uploads/<имя> → файл из папки uploads
+  app.useStaticAssets(join(process.cwd(), 'uploads'), { prefix: '/uploads/' });
   const port = process.env.PORT || 3000
   app.useGlobalPipes(
     new ValidationPipe({
