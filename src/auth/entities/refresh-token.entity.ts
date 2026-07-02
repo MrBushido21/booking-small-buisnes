@@ -1,4 +1,4 @@
-import { Column, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 
 // Сессии (refresh-токены). Ничего лишнего: чей токен и сам токен.
 @Entity()
@@ -6,6 +6,7 @@ export class RefreshTokenEntity {
     @PrimaryGeneratedColumn("uuid")
     id!: string
 
+    @Index()
     @Column()
     user_id!: string
 

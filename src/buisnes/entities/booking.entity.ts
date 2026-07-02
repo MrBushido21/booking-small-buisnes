@@ -1,7 +1,8 @@
-import { Column, Entity, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
 import { MasterEntity } from "./master.entity";
 
 @Entity()
+@Index(['master_id', 'starts_at'])
 export class BookingEntity {
     @PrimaryGeneratedColumn('uuid')
     id!: string
@@ -9,6 +10,7 @@ export class BookingEntity {
     @Column()
     service_name!: string 
 
+    @Index()
     @Column()
     service_id!: string
 

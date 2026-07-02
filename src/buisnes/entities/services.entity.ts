@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, ManyToMany, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToMany, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
 import { MasterEntity } from "./master.entity";
 import { BuisnesEntity } from "./buisne.entity";
 
@@ -16,10 +16,10 @@ export class ServicesEntity {
     @Column('numeric', { precision: 10, scale: 2 })
     price!:number
 
+    @Index()
     @Column()
     buisnes_id!: string
 
-    // обратная сторона ManyToMany: @JoinTable живёт в MasterEntity
     @ManyToMany(() => MasterEntity, (master) => master.services)
     masters!: MasterEntity[]
 

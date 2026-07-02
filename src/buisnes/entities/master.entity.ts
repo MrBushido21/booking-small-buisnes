@@ -1,4 +1,4 @@
-import { Column, Entity, JoinColumn, JoinTable, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, JoinTable, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { ServicesEntity } from "./services.entity";
 import { BuisnesEntity } from "./buisne.entity";
 import { BookingEntity } from "./booking.entity";
@@ -38,13 +38,14 @@ export class MasterEntity {
     @Column({type: "jsonb"})
     work_time!: WorkTime
 
+    @Index({ unique: true })
     @Column()
     auth_id!: string
 
+    @Index()
     @Column()
     buisnes_id!: string
 
-    // владелец связи: тут создаётся связующая таблица master_services
     @ManyToMany(() => ServicesEntity, (service) => service.masters)
     @JoinTable({ name: 'master_services' })
     services!: ServicesEntity[]

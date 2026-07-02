@@ -1,11 +1,12 @@
-import { Column, CreateDateColumn, Entity, PrimaryGeneratedColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from "typeorm";
 
-// Коды сброса пароля. Токен хранится хешированным, ищем запись по email/user_id.
+// Коды сброса пароля. Токен хранится хешированным, ищем/чистим записи по user_id.
 @Entity()
 export class ResetTokenEntity {
     @PrimaryGeneratedColumn("uuid")
     id!: string
 
+    @Index()
     @Column()
     user_id!: string
 

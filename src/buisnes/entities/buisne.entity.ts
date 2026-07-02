@@ -1,4 +1,4 @@
-import { Column, Entity, OneToMany, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { ServicesEntity } from "./services.entity";
 import { MasterEntity } from "./master.entity";
 
@@ -7,6 +7,7 @@ export class BuisnesEntity {
     @PrimaryGeneratedColumn('uuid')
     id!:string
 
+    @Index()
     @Column()
     owner_id!:string
 

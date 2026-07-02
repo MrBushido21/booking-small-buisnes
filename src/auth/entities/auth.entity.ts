@@ -12,7 +12,6 @@ export class AuthEntity {
     @Column()
     password!:string
 
-    // owner — тот, кто зарегистрировался сам; master заводит owner на этапе 2
     @Column({ default: 'master' })
     role!: 'owner' | 'master'
 }
