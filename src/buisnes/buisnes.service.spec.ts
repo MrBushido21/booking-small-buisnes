@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { BuisnesService } from './buisnes.service';
@@ -8,6 +8,7 @@ import { AuthEntity } from 'src/auth/entities/auth.entity';
 import { BuisnesEntity } from './entities/buisne.entity';
 import { MasterEntity } from './entities/master.entity';
 import { ServicesEntity } from './entities/services.entity';
+import { BookingEntity } from './entities/booking.entity';
 
 const owner = { id: 'owner-1', email: 'owner@mail.com', role: 'owner' } as AuthEntity;
 const master = { id: 'master-auth-1', email: 'm@mail.com', role: 'master' } as AuthEntity;
@@ -21,7 +22,8 @@ describe('BuisnesService', () => {
   let manager: { getRepository: jest.Mock };
   let buisnesRepo: { findOne: jest.Mock; save: jest.Mock };
   let masterRepo: { findOne: jest.Mock; update: jest.Mock };
-  let servicesRepo: { find: jest.Mock; save: jest.Mock };
+  let servicesRepo: { find: jest.Mock; save: jest.Mock; findOne: jest.Mock };
+  let bookingRepo: { find: jest.Mock; save: jest.Mock };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -34,7 +36,8 @@ describe('BuisnesService', () => {
     };
     buisnesRepo = { findOne: jest.fn(), save: jest.fn((x) => x) };
     masterRepo = { findOne: jest.fn(), update: jest.fn() };
-    servicesRepo = { find: jest.fn(), save: jest.fn((x) => x) };
+    servicesRepo = { find: jest.fn(), save: jest.fn((x) => x), findOne: jest.fn() };
+    bookingRepo = { find: jest.fn(), save: jest.fn((x) => x) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -44,6 +47,7 @@ describe('BuisnesService', () => {
         { provide: getRepositoryToken(BuisnesEntity), useValue: buisnesRepo },
         { provide: getRepositoryToken(MasterEntity), useValue: masterRepo },
         { provide: getRepositoryToken(ServicesEntity), useValue: servicesRepo },
+        { provide: getRepositoryToken(BookingEntity), useValue: bookingRepo },
       ],
     }).compile();
 
@@ -153,21 +157,140 @@ describe('BuisnesService', () => {
   });
 
   describe('master_login', () => {
-    it('возвращает токены и профиль мастера', async () => {
+    it('возвращает токены', async () => {
       authService.login.mockResolvedValue({
         auth_id: 'master-auth-1', accessToken: 'a', refreshToken: 'r',
       });
-      masterRepo.findOne.mockResolvedValue({ id: 'm1', auth_id: 'master-auth-1' });
 
       const result = await service.master_login({ email: 'm@mail.com', password: 'p' });
 
-      expect(result).toEqual(
-        expect.objectContaining({
-          accessToken: 'a',
-          refreshToken: 'r',
-          master: { id: 'm1', auth_id: 'master-auth-1' },
-        }),
-      );
+      expect(result).toEqual({ accessToken: 'a', refreshToken: 'r' });
+    });
+  });
+
+  describe('createBooking', () => {
+    // сервис 60 мин
+    const svc = { id: 's1', service: 'Стрижка', duration: 60 };
+
+    // рабочее время на ВСЕ дни недели — чтобы тест не зависел от того, на какой день выпадет дата
+    const allWeek = (open: string, close: string) => ({
+      monday: { open, close }, tuesday: { open, close }, wednesday: { open, close },
+      thursday: { open, close }, friday: { open, close }, saturday: { open, close },
+      sunday: { open, close },
+    });
+
+    // мастер с услугой s1, таймзона UTC (local == UTC → рассуждать проще)
+    const makeMaster = (work_time: object) => ({
+      id: 'master-1',
+      services: [{ id: 's1' }],
+      work_time,
+      buisnes: { timezone: 'UTC' },
+    });
+
+    // будущая дата, выровненная по сетке: +7 дней, ровно 10:00:00.000 UTC
+    const futureAt = (h: number, m: number, s = 0) => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() + 7);
+      d.setUTCHours(h, m, s, 0);
+      return d.toISOString();
+    };
+
+    const args = (starts_at: string) =>
+      ['master-1', 's1', starts_at, 'Иван', '+380000000000'] as const;
+
+    it('услуга не найдена → NotFoundException', async () => {
+      servicesRepo.findOne.mockResolvedValue(null);
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('мастер не найден → NotFoundException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(null);
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('услуга не принадлежит мастеру → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue({ ...svc, id: 's-other' });
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      // service_id в аргументах = 's1', а master.services = [{id:'s1'}], но найденная услуга — 's-other'
+      await expect(
+        service.createBooking('master-1', 's-other', futureAt(10, 0), 'Иван', '+380000000000'),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('кривая дата → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      await expect(service.createBooking(...args('не-дата'))).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('время в прошлом → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      await expect(service.createBooking(...args('2020-01-06T10:00:00Z'))).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('время не кратно 15 минутам → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      await expect(service.createBooking(...args(futureAt(10, 7)))).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('мастер не работает в этот день → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster({})); // пустое расписание = выходной каждый день
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('услуга не влезает до конца рабочего дня → BadRequestException', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc); // 60 мин
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '10:30'))); // закрытие в 10:30
+      // старт 10:00 + 60 мин = 11:00 > 10:30
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('валидная бронь → сохраняет с вычисленным ends_at', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      const starts_at = futureAt(10, 0);
+
+      await service.createBooking(...args(starts_at));
+
+      const saved = bookingRepo.save.mock.calls[0][0];
+      expect(saved).toMatchObject({
+        master_id: 'master-1',
+        service_id: 's1',
+        service_name: 'Стрижка',
+        client_name: 'Иван',
+      });
+      // ends_at = starts_at + 60 мин
+      expect(saved.ends_at.getTime() - saved.starts_at.getTime()).toBe(60 * 60_000);
+    });
+
+    it('гонка: база кинула 23P01 → ConflictException (409)', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      // эмулируем отказ EXCLUDE-constraint no_overlap на параллельной вставке
+      bookingRepo.save.mockRejectedValue({ code: '23P01' });
+
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('гонка: deadlock 40P01 → ConflictException (409)', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      // при ОДНОВРЕМЕННОЙ вставке двух пересекающихся броней база кидает deadlock
+      bookingRepo.save.mockRejectedValue({ code: '40P01' });
+
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toBeInstanceOf(ConflictException);
+    });
+
+    it('прочие ошибки БД не глотаются', async () => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+      bookingRepo.save.mockRejectedValue({ code: '23505' }); // unique_violation — не наш случай
+
+      await expect(service.createBooking(...args(futureAt(10, 0)))).rejects.toMatchObject({ code: '23505' });
     });
   });
 });

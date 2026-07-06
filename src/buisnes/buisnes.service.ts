@@ -1,8 +1,8 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AuthEntity } from 'src/auth/entities/auth.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { BuisnesEntity } from './entities/buisne.entity';
-import { Repository, In, DataSource} from 'typeorm';
+import { Repository, In, DataSource, And, MoreThanOrEqual, LessThan } from 'typeorm';
 import { MasterEntity } from './entities/master.entity';
 import { ServicesEntity } from './entities/services.entity';
 import { AuthService } from 'src/auth/auth.service';
@@ -11,6 +11,8 @@ import { CreateServiceDto } from './dto/create-service.dto';
 import { CreateMasterDto } from './dto/create-master.dto';
 import { WeekDto } from './dto/week.dto';
 import { LoginDto } from 'src/auth/dto/login.dto';
+import { BookingEntity } from './entities/booking.entity';
+import { DateTime } from 'luxon';
 
 @Injectable()
 export class BuisnesService {
@@ -23,6 +25,8 @@ export class BuisnesService {
     private readonly masterRepo: Repository<MasterEntity>,
     @InjectRepository(ServicesEntity)
     private readonly servicesRepo: Repository<ServicesEntity>,
+    @InjectRepository(BookingEntity)
+    private readonly bookingRepo: Repository<BookingEntity>,
   ) {
 
   }
@@ -32,7 +36,7 @@ export class BuisnesService {
   }
   async services_create(body: CreateServiceDto, user: AuthEntity) {
     if (user.role === "master") throw new ForbiddenException("You do not have owner rights")
-    const buisnes = await this.buisnesRepo.findOne({ where: { id: body.buisnes_id, owner_id: user.id} })
+    const buisnes = await this.buisnesRepo.findOne({ where: { id: body.buisnes_id, owner_id: user.id } })
     if (!buisnes) throw new NotFoundException("Buisnes not found")
     return await this.servicesRepo.save({
       service: body.service, duration: body.duration, price: body.price, buisnes_id: body.buisnes_id
@@ -46,7 +50,7 @@ export class BuisnesService {
     const ids = body.services.map(service => service.id);
 
     const foundServices = await this.servicesRepo.find({
-      where: { id: In(ids) }
+      where: { id: In(ids), buisnes_id: body.buisnes_id }
     });
 
     if (foundServices.length !== ids.length) {
@@ -55,35 +59,116 @@ export class BuisnesService {
       throw new NotFoundException(`Services not found: ${missingIds.join(", ")}`);
     }
     return await this.dataSource.transaction(async (manager) => {
-    // 1) аккаунт в auth — через ТОТ ЖЕ manager
-    const account = await this.authService.createMaster(body.email, body.password, manager)
+      // 1) аккаунт в auth — через ТОТ ЖЕ manager
+      const account = await this.authService.createMaster(body.email, body.password, manager)
 
-    // 2) мастер — тоже через manager
-    const master = manager.getRepository(MasterEntity).create({
-      name: body.name, specialism: body.specialism, description: body.description,
-      photo: body.photo, work_time: body.work_time, services: foundServices,
-      buisnes_id: body.buisnes_id,
-      auth_id: account.id
+      // 2) мастер — тоже через manager
+      const master = manager.getRepository(MasterEntity).create({
+        name: body.name, specialism: body.specialism, description: body.description,
+        photo: body.photo, work_time: body.work_time, services: foundServices,
+        buisnes_id: body.buisnes_id,
+        auth_id: account.id
+      })
+      return await manager.getRepository(MasterEntity).save(master)
     })
-    return await manager.getRepository(MasterEntity).save(master)
-  })
   }
 
 
   async master_login(body: LoginDto) {
     const master_account = await this.authService.login(body)
-    const master = await this.masterRepo.findOne({where: {auth_id: master_account.auth_id},
-    relations: { bookings: true, services: true}}
-    )
-    return {accessToken: master_account.accessToken, refreshToken: master_account.refreshToken, master}
+    // const master = await this.masterRepo.findOne({where: {auth_id: master_account.auth_id},
+    // relations: { bookings: true, services: true}}
+    // )
+    return { accessToken: master_account.accessToken, refreshToken: master_account.refreshToken }
   }
 
-  async master_post_week(body: WeekDto, user:AuthEntity) {
-    const master = await this.masterRepo.findOne({where: {auth_id: user.id}})
+  async master_post_week(body: WeekDto, user: AuthEntity) { // добавить id master в боди на случай если это владелец решил редактировать
+    const master = await this.masterRepo.findOne({ where: { auth_id: user.id } })
     if (!master) throw new NotFoundException("Master not found")
 
     // трогаем только свою запись (auth_id из токена) → чужое расписание не редактируется
-    await this.masterRepo.update({auth_id: user.id}, {work_time: body.work_time})
-    return this.masterRepo.findOne({where: {auth_id: user.id}, relations: { bookings: true, services: true}})
+    await this.masterRepo.update({ auth_id: user.id }, { work_time: body.work_time })
+    return this.masterRepo.findOne({ where: { auth_id: user.id }, relations: { bookings: true, services: true } })
+  }
+
+  async getBookingTime(master: string,) { //date: string, service: string
+    const from = new Date();                     // сегодня, сейчас
+    const to = new Date();
+    to.setUTCDate(to.getUTCDate() + 30);         // сегодня + 30 дней
+    const bookings = await this.bookingRepo.find({
+      where: {
+        master_id: master,
+        status: "confirmed",
+        starts_at: And(MoreThanOrEqual(from), LessThan(to))
+      }
+    })
+
+  }
+
+  async createBooking(master_id: string, service_id: string, starts_at: string,
+    client_name: string, client_phone: string) {
+
+    const service = await this.servicesRepo.findOne({ where: { id: service_id } })
+    if (!service) throw new NotFoundException('Service not found');
+    const master = await this.masterRepo.findOne({ where:
+      { id: master_id },
+      relations: { services: true, buisnes: true },
+     })
+    if (!master) throw new NotFoundException('Master not found');
+
+    const isMasterService = master.services.some(service => service.id === service_id)
+    if (!isMasterService) throw new BadRequestException('Master dont have this service')
+    const start = new Date(starts_at);
+    if (isNaN(start.getTime())) {
+      throw new BadRequestException('Некорректная дата');
+    }
+    if (start.getTime() < Date.now()) {
+      throw new BadRequestException('Нельзя записаться в прошлое');
+    }
+    const SLOT_STEP = 15;
+    if (start.getUTCMinutes() % SLOT_STEP !== 0 || start.getUTCSeconds() !== 0) {
+      throw new BadRequestException('Время должно быть кратно 15 минутам');
+    }
+    const end = new Date(start.getTime() + service.duration * 60_000);
+
+    // всё сравниваем в таймзоне салона: work_time — это местное время салона
+    const tz = master.buisnes.timezone;
+    const local = DateTime.fromJSDate(start, { zone: 'utc' }).setZone(tz);
+
+    // день недели тоже в зоне салона (23:00 UTC может быть уже следующий день локально)
+    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const daySchedule = master.work_time[days[local.weekday % 7]]; // luxon: 1=пн..7=вс → %7 даёт 0=вс
+    if (!daySchedule) {
+      throw new BadRequestException('Мастер не работает в этот день');
+    }
+
+    const [oh, om] = daySchedule.open.split(':').map(Number);
+    const [ch, cm] = daySchedule.close.split(':').map(Number);
+    const open = local.set({ hour: oh, minute: om, second: 0, millisecond: 0 });
+    const close = local.set({ hour: ch, minute: cm, second: 0, millisecond: 0 });
+    const endLocal = local.plus({ minutes: service.duration });
+
+    if (local < open || endLocal > close) {
+      throw new BadRequestException('Время вне рабочих часов мастера');
+    }
+    try {
+      return await this.bookingRepo.save({
+        master_id,
+        service_id,
+        service_name: service.service,
+        starts_at: start,
+        ends_at: end,
+        client_name,
+        client_phone,
+      });
+    } catch (e: any) {
+      // 23P01 = exclusion_violation (constraint no_overlap сработал на уже закоммиченной брони)
+      // 40P01 = deadlock при ОДНОВРЕМЕННОЙ вставке двух пересекающихся броней
+      // оба означают: слот перехватил конкурент
+      if (e.code === '23P01' || e.code === '40P01') {
+        throw new ConflictException('Это время уже занято');
+      }
+      throw e;                                        // прочие ошибки не глотаем
+    }
   }
 }

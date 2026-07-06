@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsTimezone } from '../../utils/is-timezone.validator';
 
 export class CreateBuisneDto {
   @ApiProperty({ example: 'Салон красоты «Аврора»', description: 'Название салона' })
@@ -11,6 +12,6 @@ export class CreateBuisneDto {
   address!: string;
 
   @ApiPropertyOptional({ example: 'Europe/Kyiv', description: 'IANA-таймзона салона (по умолчанию Europe/Kyiv)' })
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsTimezone()
   timezone?: string;
 }

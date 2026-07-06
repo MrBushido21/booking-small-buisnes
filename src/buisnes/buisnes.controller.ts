@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res, Get, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { BuisnesService } from './buisnes.service';
 import { JwtAuthGuard } from 'src/guard/guard';
@@ -88,5 +88,14 @@ export class BuisnesController {
     const { accessToken, refreshToken } = await this.buisnesService.master_login(body);
     this.setRefreshCookie(res, refreshToken);
     return res.status(201).json({ accessToken });
+  }
+
+  @Get('/booking')
+  getBookingTime(
+    @Query('master') master:string,
+    // @Query('date') date:string,
+    // @Query('service') service:string,
+  ) {
+    return this.buisnesService.getBookingTime(master) //date, service
   }
 }

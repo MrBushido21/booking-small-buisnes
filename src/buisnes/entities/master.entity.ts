@@ -2,6 +2,7 @@ import { Column, Entity, Index, JoinColumn, JoinTable, ManyToMany, ManyToOne, On
 import { ServicesEntity } from "./services.entity";
 import { BuisnesEntity } from "./buisne.entity";
 import { BookingEntity } from "./booking.entity";
+import { AuthEntity } from "../../auth/entities/auth.entity";
 
 interface DaySchedule {
   open: string;
@@ -39,7 +40,7 @@ export class MasterEntity {
     work_time!: WorkTime
 
     @Index({ unique: true })
-    @Column()
+    @Column({ type: 'uuid' })
     auth_id!: string
 
     @Index()
@@ -53,6 +54,11 @@ export class MasterEntity {
     @ManyToOne(() => BuisnesEntity, (buisnes) => buisnes.masters, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'buisnes_id' })
     buisnes!: BuisnesEntity
+
+    // FK на аккаунт мастера: удалили аккаунт → удалился и мастер (нет сирот)
+    @ManyToOne(() => AuthEntity, { onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'auth_id' })
+    auth!: AuthEntity
 
     @OneToMany(() => BookingEntity, (booking) => booking.master)
     bookings!: BookingEntity[]

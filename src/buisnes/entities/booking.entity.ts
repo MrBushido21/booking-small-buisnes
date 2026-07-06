@@ -20,6 +20,15 @@ export class BookingEntity {
     @Column({ type: 'timestamptz' })
     ends_at!: Date
 
+    @Column({default: "confirmed"})
+    status!: "pending" | "confirmed" | "cancelled" | "completed"
+
+    @Column()
+    client_name!: string
+
+    @Column()
+    client_phone!:string
+
     @Column()
     master_id!: string
 

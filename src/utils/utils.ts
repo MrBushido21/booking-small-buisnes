@@ -14,3 +14,10 @@ export async function matchPassword(
 ): Promise<boolean> {
   return bcrypt.compare(password, hash);
 }
+
+export function atTime(day: Date, hhmm: string): Date {
+      const [h, m] = hhmm.split(':').map(Number);
+      const d = new Date(day);
+      d.setUTCHours(h, m, 0, 0);
+      return d;
+    }
