@@ -1,5 +1,6 @@
-import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToOne, PrimaryGeneratedColumn, Unique } from "typeorm";
 import { MasterEntity } from "./master.entity";
+import { ServicesEntity } from "./services.entity";
 
 @Entity()
 @Index(['master_id', 'starts_at'])
@@ -35,4 +36,8 @@ export class BookingEntity {
     @ManyToOne(() => MasterEntity, (master) => master.bookings, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'master_id' })
     master!: MasterEntity
+
+    @ManyToOne(() => ServicesEntity, (service) => service.bookings, { onDelete: 'CASCADE' })
+    @JoinColumn({ name: 'service_id' })
+    service!: ServicesEntity
 }

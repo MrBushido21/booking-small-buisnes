@@ -1,6 +1,7 @@
-import { Column, Entity, Index, JoinColumn, ManyToMany, ManyToOne, PrimaryGeneratedColumn } from "typeorm";
+import { Column, Entity, Index, JoinColumn, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { MasterEntity } from "./master.entity";
 import { BuisnesEntity } from "./buisne.entity";
+import { BookingEntity } from "./booking.entity";
 
 @Entity()
 export class ServicesEntity {
@@ -26,4 +27,7 @@ export class ServicesEntity {
     @ManyToOne(() => BuisnesEntity, (buisnes) => buisnes.services, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'buisnes_id' })
     buisnes!: BuisnesEntity
+
+    @OneToMany(() => BookingEntity, (booking) => booking.service)
+    bookings!: BookingEntity[]
 }

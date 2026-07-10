@@ -92,10 +92,18 @@ export class BuisnesController {
 
   @Get('/booking')
   getBookingTime(
-    @Query('master') master:string,
-    // @Query('date') date:string,
-    // @Query('service') service:string,
+    @Query('master_id') master_id:string,
+    @Query('date') date:string,
+    @Query('service_id') service_id:string,
   ) {
-    return this.buisnesService.getBookingTime(master) //date, service
+    return this.buisnesService.getBookingFomDay(master_id, date, service_id) //date, service
+  }
+
+  @Post('/booking')
+  createBooking(
+    @Body() body: {master_id: string, service_id: string, starts_at: string,
+    client_name: string, client_phone: string}
+  ) {
+    return this.buisnesService.createBooking(body)
   }
 }

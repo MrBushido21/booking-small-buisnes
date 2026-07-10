@@ -21,3 +21,21 @@ export function atTime(day: Date, hhmm: string): Date {
       d.setUTCHours(h, m, 0, 0);
       return d;
     }
+
+export const dayWeek = {
+  "0": "Sunday",
+  "1": "Monday",
+  "2": "Tuesday",
+  "3": "Wednesday",
+  "4": "Thursday",
+  "5": "Friday",
+  "6": "Saturday",
+} as const;
+
+export function addMinutes(time: string, duration: number, minus?:"yes"): string {
+  const [h, m] = time.split(':').map(Number);
+  const total = minus ? h * 60 + m - duration : h * 60 + m + duration;
+  const hh = Math.floor(total / 60);
+  const mm = total % 60;
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
