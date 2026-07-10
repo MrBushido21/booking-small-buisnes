@@ -1,6 +1,6 @@
 import { Column, Entity, Index, JoinColumn, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { MasterEntity } from "./master.entity";
-import { BuisnesEntity } from "./buisne.entity";
+import { BuisnesEntity } from "./buisnes.entity";
 import { BookingEntity } from "./booking.entity";
 
 @Entity()

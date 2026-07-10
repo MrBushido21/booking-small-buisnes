@@ -1,6 +1,6 @@
 import { Column, Entity, Index, JoinColumn, JoinTable, ManyToMany, ManyToOne, OneToMany, PrimaryGeneratedColumn } from "typeorm";
 import { ServicesEntity } from "./services.entity";
-import { BuisnesEntity } from "./buisne.entity";
+import { BuisnesEntity } from "./buisnes.entity";
 import { BookingEntity } from "./booking.entity";
 import { AuthEntity } from "../../auth/entities/auth.entity";
 

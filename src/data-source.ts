@@ -3,7 +3,7 @@ import { DataSource } from 'typeorm';
 import { AuthEntity } from './auth/entities/auth.entity';
 import { RefreshTokenEntity } from './auth/entities/refresh-token.entity';
 import { ResetTokenEntity } from './auth/entities/reset-token.entity';
-import { BuisnesEntity } from './buisnes/entities/buisne.entity';
+import { BuisnesEntity } from './buisnes/entities/buisnes.entity';
 import { ServicesEntity } from './buisnes/entities/services.entity';
 import { MasterEntity } from './buisnes/entities/master.entity';
 import { BookingEntity } from './buisnes/entities/booking.entity';

@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res, Get, Query } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res, Get, Query, Patch, Param, UnauthorizedException, Headers } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { BuisnesService } from './buisnes.service';
 import { JwtAuthGuard } from 'src/guard/guard';
@@ -6,7 +6,7 @@ import type { Request, Response } from 'express';
 import { photoMulterOptions } from 'src/common/upload.config';
 import { Throttle } from '@nestjs/throttler';
 import {
-  ApiBearerAuth, ApiConsumes, ApiCreatedResponse, ApiForbiddenResponse,
+  ApiBearerAuth, ApiConflictResponse, ApiConsumes, ApiCreatedResponse, ApiForbiddenResponse,
   ApiOperation, ApiTags, ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { LoginDto } from 'src/auth/dto/login.dto';
@@ -14,6 +14,9 @@ import { CreateBuisneDto } from './dto/create-buisne.dto';
 import { CreateServiceDto } from './dto/create-service.dto';
 import { CreateMasterDto } from './dto/create-master.dto';
 import { WeekDto } from './dto/week.dto';
+import { GetBookingDto } from './dto/get-booking.dto';
+import { CreateBookingDto } from './dto/create-booking.dto';
+import { CancelBookingDto } from './dto/cancell-booking.dto';
 
 @ApiTags('buisnes')
 @Controller('buisnes')
@@ -91,19 +94,49 @@ export class BuisnesController {
   }
 
   @Get('/booking')
-  getBookingTime(
-    @Query('master_id') master_id:string,
-    @Query('date') date:string,
-    @Query('service_id') service_id:string,
+  @ApiOperation({ summary: 'Просмтотр для юзера свободных слотов в конкретный день' })
+  @ApiCreatedResponse({ description: 'Возвращает свободные слоты в конкретный день' })
+  getBookingTime(@Query() query: GetBookingDto) {
+    return this.buisnesService.getBookingFomDay(query.master_id, query.date, query.service_id);
+  }
+
+
+  @UseGuards(JwtAuthGuard)
+  @Get('master/booking')
+  @ApiOperation({ summary: 'Мастер просматривает свои записи' })
+  @ApiCreatedResponse({ description: 'Возвращает все записи за 30 дней' })
+  @ApiUnauthorizedResponse({ description: 'Неверный логин или пароль' })
+  getBookingTimeMaster(
+    @Req() req: Request
   ) {
-    return this.buisnesService.getBookingFomDay(master_id, date, service_id) //date, service
+    const master = req.user!
+    const master_id = master.id
+    return this.buisnesService.getBookingTime(master_id)
   }
 
   @Post('/booking')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @ApiOperation({ summary: 'Клиент делает бронь' })
+  @ApiCreatedResponse({ description: 'Если успех возвращает данные о записи' })
+  @ApiConflictResponse({ description: 'Слот занят или бронь уже существует' })
   createBooking(
-    @Body() body: {master_id: string, service_id: string, starts_at: string,
-    client_name: string, client_phone: string}
+    @Body() body: CreateBookingDto,
+    @Headers('Idempotency-Key') idempotencyKey: string,
   ) {
-    return this.buisnesService.createBooking(body)
+    return this.buisnesService.createBooking(body, idempotencyKey)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Patch('/booking')
+  @ApiOperation({ summary: 'Владелец отменяет бронь' })
+  @ApiCreatedResponse({ description: 'Если успех возвращает данные о записи с новым статусом' })
+  @ApiConflictResponse({ description: 'Слот занят или бронь уже существует' })
+  cancellBooking(
+    @Param() param: CancelBookingDto,
+    @Req() req: Request
+  ) {
+    const owner = req.user
+    const owner_id = owner!.id
+    return this.buisnesService.cancellBooking(param.id, param.master_id, param.buisnes_id, owner_id)
   }
 }

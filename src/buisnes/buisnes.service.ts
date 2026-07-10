@@ -1,7 +1,7 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { AuthEntity } from 'src/auth/entities/auth.entity';
 import { InjectRepository } from '@nestjs/typeorm';
-import { BuisnesEntity } from './entities/buisne.entity';
+import { BuisnesEntity } from './entities/buisnes.entity';
 import { Repository, In, DataSource, And, MoreThanOrEqual, LessThan, MoreThan } from 'typeorm';
 import { MasterEntity } from './entities/master.entity';
 import { ServicesEntity } from './entities/services.entity';
@@ -13,11 +13,14 @@ import { WeekDto } from './dto/week.dto';
 import { LoginDto } from 'src/auth/dto/login.dto';
 import { BookingEntity } from './entities/booking.entity';
 import { DateTime } from 'luxon';
-import { addMinutes, dayWeek } from 'src/utils/utils';
+import { addMinutes, dayWeek, toMin, toStr } from 'src/utils/utils';
+import Redis from 'ioredis';
+import { CreateBookingDto } from './dto/create-booking.dto';
 
 @Injectable()
 export class BuisnesService {
   constructor(
+    @Inject('REDIS') private readonly redis: Redis,
     private readonly authService: AuthService,
     private readonly dataSource: DataSource,
     @InjectRepository(BuisnesEntity)
@@ -30,6 +33,15 @@ export class BuisnesService {
     private readonly bookingRepo: Repository<BookingEntity>,
   ) {
 
+  }
+  private async invalidateAvailability(master_id: string, starts_at: Date) {
+    try {
+      const day = starts_at.toISOString().slice(0, 10);
+      const keys = await this.redis.keys(`avail:${master_id}:${day}:*`);
+      if (keys.length) await this.redis.del(...keys);
+    } catch (e) {
+      console.error('Cache invalidation failed:', e);
+    }
   }
   async buisnes_create(body: CreateBuisneDto, user: AuthEntity) {
     if (user.role === "master") throw new ForbiddenException("You do not have owner rights")
@@ -77,9 +89,6 @@ export class BuisnesService {
 
   async master_login(body: LoginDto) {
     const master_account = await this.authService.login(body)
-    // const master = await this.masterRepo.findOne({where: {auth_id: master_account.auth_id},
-    // relations: { bookings: true, services: true}}
-    // )
     return { accessToken: master_account.accessToken, refreshToken: master_account.refreshToken }
   }
 
@@ -105,16 +114,22 @@ export class BuisnesService {
       },
       order: { starts_at: 'ASC' }
     })
-    const map = new Map<string, {start: Date, end:Date}[]>()
-   for (const booking of bookings) {
-    const date = booking.starts_at.toISOString().slice(0, 10)
-    if (!map.has(date)) map.set(date, [])
-    map.get(date)?.push({start: booking.starts_at, end: booking.ends_at})
-   }
+    const map = new Map<string, { start: Date, end: Date }[]>()
+    for (const booking of bookings) {
+      const date = booking.starts_at.toISOString().slice(0, 10)
+      if (!map.has(date)) map.set(date, [])
+      map.get(date)?.push({ start: booking.starts_at, end: booking.ends_at })
+    }
     return bookings
   }
 
   async getBookingFomDay(master_id: string, day: string, service_id: string) {
+    const cacheKey = `avail:${master_id}:${day}:${service_id}`
+    const cached = await this.redis.get(cacheKey)
+    if (cached) {
+      return JSON.parse(cached)
+    }
+
     const from = new Date(day)
     if (isNaN(from.getTime())) {
       throw new BadRequestException('Invalid day');
@@ -148,10 +163,7 @@ export class BuisnesService {
       const start = local.hour * 60 + local.minute;
       return { start, end: start + b.service.duration };
     });
-    const toStr = (m: number) =>
-      `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
 
-    const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
     let startDay = toMin(masterWorkTimeInTheDay.open);
     let endDay = toMin(masterWorkTimeInTheDay.close);
 
@@ -167,14 +179,18 @@ export class BuisnesService {
         x += 15
       }
     }
+    await this.redis.set(cacheKey, JSON.stringify(slots), "EX", 60)
     return slots;
   }
 
-  async createBooking(body: {
-    master_id: string, service_id: string, starts_at: string,
-    client_name: string, client_phone: string
-  }) {
-
+  async createBooking(body: CreateBookingDto, idempotencyKey: string) {
+    const idemRedisKey = idempotencyKey ? `idem:${idempotencyKey}` : null;
+    if (idemRedisKey) {
+      const cached = await this.redis.get(idemRedisKey);
+      if (cached) {
+        return JSON.parse(cached);   // повтор — отдаём результат первого запроса, не создаём
+      }
+    }
     const service = await this.servicesRepo.findOne({ where: { id: body.service_id } })
     if (!service) throw new NotFoundException('Service not found');
     const master = await this.masterRepo.findOne({
@@ -220,10 +236,10 @@ export class BuisnesService {
       throw new BadRequestException('Время вне рабочих часов мастера');
     }
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         await manager.findOne(MasterEntity, {
-          where: {id: master.id},
-          lock: {mode: "pessimistic_write"}
+          where: { id: master.id },
+          lock: { mode: "pessimistic_write" }
         })
         const conflict = await manager.findOne(BookingEntity, {
           where: {
@@ -245,12 +261,47 @@ export class BuisnesService {
           client_phone: body.client_phone,
         });
       });
+
+      await this.invalidateAvailability(body.master_id, start)
+      if (idemRedisKey) {
+        await this.redis.set(idemRedisKey, JSON.stringify(result), 'EX', 60);
+      }
+      return result
+
     } catch (e: any) {
-      // страховка слоя 3 (exclusion-констрейнт / deadlock), если блокировка не отработала
+      if (idemRedisKey) {
+        await this.redis.del(idemRedisKey);
+      }
       if (e.code === '23P01' || e.code === '40P01') {
         throw new ConflictException('Это время уже занято');
       }
       throw e;
     }
+  }
+
+  async cancellBooking(booking_id: string, master_id: string,
+    buisnes_id: string, owner_id: string) {
+    const booking = await this.bookingRepo.findOne({
+      where: {
+        id: booking_id,
+        master_id: master_id,
+      }
+    })
+    if (!booking) throw new NotFoundException("Booking not found")
+    const buisnes = await this.buisnesRepo.findOne({
+      where: {
+        id: buisnes_id,
+        owner_id
+      }
+    })
+    if (!buisnes) throw new NotFoundException("Buisnes not found")
+    const deadline = booking.starts_at.getTime() - buisnes.cancellationDeadlineHours * 60 * 60 * 1000;
+
+    if (Date.now() > deadline) {
+      throw new BadRequestException('Bookings cannot be cancelled less than 3 hours before the start time');
+    }
+    const result = await this.bookingRepo.save({ ...booking, status: "cancelled" })
+    await this.invalidateAvailability(master_id, booking.starts_at)
+    return result
   }
 }

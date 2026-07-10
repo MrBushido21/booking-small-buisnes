@@ -17,6 +17,9 @@ export class BuisnesEntity {
     @Column()
     address!:string
 
+    @Column({default: 3})
+    cancellationDeadlineHours!: number
+
     @Column({ default: 'Europe/Kyiv' })
     timezone!: string
 

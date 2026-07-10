@@ -4,10 +4,11 @@ import { BuisnesController } from './buisnes.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from '../auth/auth.module';
 import { JwtAuthGuard } from '../guard/guard';
-import { BuisnesEntity } from './entities/buisne.entity';
+import { BuisnesEntity } from './entities/buisnes.entity';
 import { ServicesEntity } from './entities/services.entity';
 import { MasterEntity } from './entities/master.entity';
 import { BookingEntity } from './entities/booking.entity';
+import Redis from 'ioredis';
 
 @Module({
   imports: [
@@ -17,6 +18,15 @@ import { BookingEntity } from './entities/booking.entity';
     AuthModule,
   ],
   controllers: [BuisnesController],
-  providers: [BuisnesService, JwtAuthGuard],
+  providers: [
+    {
+      provide: 'REDIS',
+      useFactory: () => new Redis({
+        host: process.env.REDIS_HOST ?? 'localhost',
+        port: 6379,
+        password: process.env.REDIS_PASSWORD,
+      }),
+    },
+    BuisnesService, JwtAuthGuard],
 })
 export class BuisnesModule {}

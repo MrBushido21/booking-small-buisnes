@@ -5,7 +5,7 @@ import { DataSource } from 'typeorm';
 import { BuisnesService } from './buisnes.service';
 import { AuthService } from 'src/auth/auth.service';
 import { AuthEntity } from 'src/auth/entities/auth.entity';
-import { BuisnesEntity } from './entities/buisne.entity';
+import { BuisnesEntity } from './entities/buisnes.entity';
 import { MasterEntity } from './entities/master.entity';
 import { ServicesEntity } from './entities/services.entity';
 import { BookingEntity } from './entities/booking.entity';
