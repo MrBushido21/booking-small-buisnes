@@ -132,11 +132,11 @@ export class BuisnesController {
   @ApiCreatedResponse({ description: 'Если успех возвращает данные о записи с новым статусом' })
   @ApiConflictResponse({ description: 'Слот занят или бронь уже существует' })
   cancellBooking(
-    @Param() param: CancelBookingDto,
+    @Body() body: CancelBookingDto,
     @Req() req: Request
   ) {
     const owner = req.user
     const owner_id = owner!.id
-    return this.buisnesService.cancellBooking(param.id, param.master_id, param.buisnes_id, owner_id)
+    return this.buisnesService.cancellBooking(body.id, body.master_id, body.buisnes_id, owner_id)
   }
 }

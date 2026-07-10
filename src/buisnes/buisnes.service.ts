@@ -120,7 +120,7 @@ export class BuisnesService {
       if (!map.has(date)) map.set(date, [])
       map.get(date)?.push({ start: booking.starts_at, end: booking.ends_at })
     }
-    return bookings
+    return Object.fromEntries(map)
   }
 
   async getBookingFomDay(master_id: string, day: string, service_id: string) {
@@ -136,7 +136,7 @@ export class BuisnesService {
     }
     from.setUTCHours(0, 0, 0, 0)
     const to = new Date(from)
-    to.setUTCHours(to.getUTCDate() + 1)
+    to.setUTCDate(to.getUTCDate() + 1)
 
     const bookings = await this.bookingRepo.find({
       where: {
@@ -186,11 +186,17 @@ export class BuisnesService {
   async createBooking(body: CreateBookingDto, idempotencyKey: string) {
     const idemRedisKey = idempotencyKey ? `idem:${idempotencyKey}` : null;
     if (idemRedisKey) {
-      const cached = await this.redis.get(idemRedisKey);
-      if (cached) {
-        return JSON.parse(cached);   // повтор — отдаём результат первого запроса, не создаём
+      const acquired = await this.redis.set(idemRedisKey, "pending", "EX", 3600, "NX")
+      if (!acquired) {
+        // ключ уже занят другим запросом с тем же Idempotency-Key
+        const cached = await this.redis.get(idemRedisKey);
+        if (cached && cached !== 'pending') {
+          return JSON.parse(cached);   // первый запрос закончил — отдаём его бронь
+        }
+        throw new ConflictException('Запрос уже обрабатывается, повторите через мгновение')
       }
     }
+
     const service = await this.servicesRepo.findOne({ where: { id: body.service_id } })
     if (!service) throw new NotFoundException('Service not found');
     const master = await this.masterRepo.findOne({
@@ -282,26 +288,20 @@ export class BuisnesService {
   async cancellBooking(booking_id: string, master_id: string,
     buisnes_id: string, owner_id: string) {
     const booking = await this.bookingRepo.findOne({
-      where: {
-        id: booking_id,
-        master_id: master_id,
-      }
-    })
-    if (!booking) throw new NotFoundException("Booking not found")
-    const buisnes = await this.buisnesRepo.findOne({
-      where: {
-        id: buisnes_id,
-        owner_id
-      }
-    })
-    if (!buisnes) throw new NotFoundException("Buisnes not found")
-    const deadline = booking.starts_at.getTime() - buisnes.cancellationDeadlineHours * 60 * 60 * 1000;
+      where: { id: booking_id },
+      relations: { master: { buisnes: true } },
+    });
+    if (!booking) throw new NotFoundException("Booking not found");
+    if (booking.master.buisnes.owner_id !== owner_id)
+      throw new ForbiddenException("Not your booking");
+    const cancellationDeadlineHours = booking.master.buisnes.cancellationDeadlineHours
+    const deadline = booking.starts_at.getTime() - cancellationDeadlineHours * 60 * 60 * 1000;
 
     if (Date.now() > deadline) {
-      throw new BadRequestException('Bookings cannot be cancelled less than 3 hours before the start time');
+      throw new BadRequestException(`Bookings cannot be cancelled less than ${cancellationDeadlineHours} hours before the start time`);
     }
     const result = await this.bookingRepo.save({ ...booking, status: "cancelled" })
-    await this.invalidateAvailability(master_id, booking.starts_at)
+    await this.invalidateAvailability(booking.master_id, booking.starts_at)
     return result
   }
 }
