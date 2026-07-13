@@ -130,34 +130,40 @@ export class BuisnesService {
       return JSON.parse(cached)
     }
 
-    const from = new Date(day)
-    if (isNaN(from.getTime())) {
-      throw new BadRequestException('Invalid day');
-    }
-    from.setUTCHours(0, 0, 0, 0)
-    const to = new Date(from)
-    to.setUTCDate(to.getUTCDate() + 1)
+    const master = await this.masterRepo.findOne({
+      where: { id: master_id },
+      relations: { buisnes: true },
+    });
+    if (!master) throw new NotFoundException('Master not found');
+
+    const service = await this.servicesRepo.findOne({ where: { id: service_id } });
+    if (!service) throw new BadRequestException('Invalid service');
+
+    const tz = master.buisnes.timezone;
+
+    const dayStart = DateTime.fromISO(day, { zone: tz }).startOf('day');
+    if (!dayStart.isValid) throw new BadRequestException('Invalid day');
+    const dayEnd = dayStart.plus({ days: 1 });
+
+    const dayOfWeek = dayStart.weekday % 7;   // Luxon: 1=Пн..7=Вс → 0=Вс..6=Сб
 
     const bookings = await this.bookingRepo.find({
       where: {
         master_id,
-        status: "confirmed",
-        starts_at: And(MoreThanOrEqual(from), LessThan(to))
+        status: 'confirmed',
+        starts_at: And(
+          MoreThanOrEqual(dayStart.toJSDate()),
+          LessThan(dayEnd.toJSDate()),
+        ),
       },
-      relations: { service: true }
-    })
-    const dayOfWeek = new Date(day).getUTCDay()
-
-    const service = await this.servicesRepo.findOne({ where: { id: service_id } })
-    if (!service) throw new BadRequestException('Invalid service')
-    const master = await this.masterRepo.findOne({ where: { id: master_id }, relations: { buisnes: true } })
-    if (!master) throw new NotFoundException('Master not found')
+      relations: { service: true },
+});
     const masterWorkTimeInTheDay = master?.work_time[dayWeek[dayOfWeek].toLowerCase()]
 
     if (!masterWorkTimeInTheDay) {
       return [];   // в этот день мастер не работает
     }
-    const tz = master.buisnes.timezone;
+
     const busy = bookings.map(b => {
       const local = DateTime.fromJSDate(b.starts_at, { zone: 'utc' }).setZone(tz);
       const start = local.hour * 60 + local.minute;
@@ -285,8 +291,7 @@ export class BuisnesService {
     }
   }
 
-  async cancellBooking(booking_id: string, master_id: string,
-    buisnes_id: string, owner_id: string) {
+  async cancellBooking(booking_id: string, owner_id: string) {
     const booking = await this.bookingRepo.findOne({
       where: { id: booking_id },
       relations: { master: { buisnes: true } },

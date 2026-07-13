@@ -1,4 +1,4 @@
-import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res, Get, Query, Patch, Param, UnauthorizedException, Headers } from '@nestjs/common';
+import { Controller, Post, Body, UseGuards, Req, UseInterceptors, UploadedFile, BadRequestException, Res, Get, Query, Patch, Param, UnauthorizedException, Headers, ParseUUIDPipe } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { BuisnesService } from './buisnes.service';
 import { JwtAuthGuard } from 'src/guard/guard';
@@ -6,7 +6,11 @@ import type { Request, Response } from 'express';
 import { photoMulterOptions } from 'src/common/upload.config';
 import { Throttle } from '@nestjs/throttler';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth, ApiConflictResponse, ApiConsumes, ApiCreatedResponse, ApiForbiddenResponse,
+  ApiHeader,
+  ApiNotFoundResponse,
+  ApiOkResponse,
   ApiOperation, ApiTags, ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { LoginDto } from 'src/auth/dto/login.dto';
@@ -16,7 +20,6 @@ import { CreateMasterDto } from './dto/create-master.dto';
 import { WeekDto } from './dto/week.dto';
 import { GetBookingDto } from './dto/get-booking.dto';
 import { CreateBookingDto } from './dto/create-booking.dto';
-import { CancelBookingDto } from './dto/cancell-booking.dto';
 
 @ApiTags('buisnes')
 @Controller('buisnes')
@@ -93,19 +96,20 @@ export class BuisnesController {
     return res.status(201).json({ accessToken });
   }
 
-  @Get('/booking')
+  @Get('/slots')
   @ApiOperation({ summary: 'Просмтотр для юзера свободных слотов в конкретный день' })
-  @ApiCreatedResponse({ description: 'Возвращает свободные слоты в конкретный день' })
+  @ApiOkResponse({ description: 'Возвращает свободные слоты в конкретный день' }) 
   getBookingTime(@Query() query: GetBookingDto) {
     return this.buisnesService.getBookingFomDay(query.master_id, query.date, query.service_id);
   }
 
 
   @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @Get('master/booking')
   @ApiOperation({ summary: 'Мастер просматривает свои записи' })
-  @ApiCreatedResponse({ description: 'Возвращает все записи за 30 дней' })
-  @ApiUnauthorizedResponse({ description: 'Неверный логин или пароль' })
+  @ApiOkResponse({ description: 'Возвращает все записи за 30 дней' })
+  @ApiUnauthorizedResponse({ description: 'нет токена / токен протух»' })
   getBookingTimeMaster(
     @Req() req: Request
   ) {
@@ -119,6 +123,11 @@ export class BuisnesController {
   @ApiOperation({ summary: 'Клиент делает бронь' })
   @ApiCreatedResponse({ description: 'Если успех возвращает данные о записи' })
   @ApiConflictResponse({ description: 'Слот занят или бронь уже существует' })
+  @ApiHeader({
+  name: 'Idempotency-Key',
+  required: false,
+  description: 'Уникальный ключ запроса (UUID). При повторной отправке с тем же ключом бронь не продублируется — вернётся результат первого запроса.',
+})
   createBooking(
     @Body() body: CreateBookingDto,
     @Headers('Idempotency-Key') idempotencyKey: string,
@@ -127,16 +136,19 @@ export class BuisnesController {
   }
 
   @UseGuards(JwtAuthGuard)
-  @Patch('/booking')
+  @ApiBearerAuth()
+  @Patch('booking/:id/cancel')
   @ApiOperation({ summary: 'Владелец отменяет бронь' })
-  @ApiCreatedResponse({ description: 'Если успех возвращает данные о записи с новым статусом' })
-  @ApiConflictResponse({ description: 'Слот занят или бронь уже существует' })
+  @ApiOkResponse({ description: 'Бронь отменена, статус cancelled' })
+  @ApiForbiddenResponse({ description: 'Бронь не принадлежит вашему салону' })
+  @ApiNotFoundResponse({ description: 'Бронь не найдена' })
+  @ApiBadRequestResponse({ description: 'Отмена позже дедлайна (cancellationDeadlineHours)' })
   cancellBooking(
-    @Body() body: CancelBookingDto,
+    @Param('id', ParseUUIDPipe) id:string,
     @Req() req: Request
   ) {
     const owner = req.user
     const owner_id = owner!.id
-    return this.buisnesService.cancellBooking(body.id, body.master_id, body.buisnes_id, owner_id)
+    return this.buisnesService.cancellBooking(id, owner_id)
   }
 }
