@@ -34,6 +34,7 @@ async function bootstrap() {
   const document = SwaggerModule.createDocument(app, swaggerConfig);
   SwaggerModule.setup('docs', app, document);
 
+  app.enableShutdownHooks();
   await app.listen(Number(port));
   console.log(`server started on http://localhost:${port}/`);
   console.log(`swagger docs on http://localhost:${port}/docs`);

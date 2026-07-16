@@ -30,6 +30,9 @@ export class BookingEntity {
     @Column()
     client_phone!:string
 
+    @Column({ nullable: true })
+    client_email?: string;
+
     @Column()
     master_id!: string
 

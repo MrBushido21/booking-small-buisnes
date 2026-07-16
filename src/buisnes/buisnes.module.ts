@@ -8,25 +8,15 @@ import { BuisnesEntity } from './entities/buisnes.entity';
 import { ServicesEntity } from './entities/services.entity';
 import { MasterEntity } from './entities/master.entity';
 import { BookingEntity } from './entities/booking.entity';
-import Redis from 'ioredis';
+import { BullModule } from '@nestjs/bullmq';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([BuisnesEntity, ServicesEntity, MasterEntity, BookingEntity]),
-    // AuthService (createMaster/login) + экспортируемые JwtModule и репозиторий
-    // AuthEntity, из которых собирается локальный JwtAuthGuard
+    BullModule.registerQueue({ name: 'emails' }),
     AuthModule,
   ],
   controllers: [BuisnesController],
-  providers: [
-    {
-      provide: 'REDIS',
-      useFactory: () => new Redis({
-        host: process.env.REDIS_HOST ?? 'localhost',
-        port: 6379,
-        password: process.env.REDIS_PASSWORD,
-      }),
-    },
-    BuisnesService, JwtAuthGuard],
+  providers: [ BuisnesService, JwtAuthGuard],
 })
 export class BuisnesModule {}

@@ -1,5 +1,5 @@
-import { ApiProperty } from "@nestjs/swagger"
-import { IsNotEmpty, IsPhoneNumber, IsUUID, MinLength } from "class-validator"
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger"
+import { IsEmail, IsNotEmpty, IsOptional, IsPhoneNumber, IsUUID, MinLength } from "class-validator"
 
 export class CreateBookingDto {
     @ApiProperty({example: 'uiid', description: "Master Id"})
@@ -25,4 +25,9 @@ export class CreateBookingDto {
     @IsNotEmpty()
     @IsPhoneNumber("UA")
     client_phone!: string
+
+   @ApiPropertyOptional({ example: 'example@gmail.com', description: 'User email' })
+    @IsOptional()
+    @IsEmail()
+    client_email?: string;
 }

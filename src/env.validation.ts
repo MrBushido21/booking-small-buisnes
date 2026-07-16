@@ -27,6 +27,15 @@ class EnvVars {
   @IsOptional()
   @IsString()
   FRONTEND_URL?: string;
+
+   @IsString()
+  SMTP_HOST!: string;
+
+  @IsNumber()
+  SMTP_PORT!: number;
+
+  @IsString()
+  MAIL_FROM!: string;
 }
 
 export function validateEnv(config: Record<string, unknown>) {

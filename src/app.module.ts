@@ -1,13 +1,16 @@
 import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { AuthModule } from './auth/auth.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { CronModule } from './cron.module';
 import { BuisnesModule } from './buisnes/buisnes.module';
 import { validateEnv } from './env.validation';
+import { BullModule } from '@nestjs/bullmq';
+import { NotificationsModule } from './notifications/notifications.module';
+import { RedisModule } from './common/redis.module';
 
 @Module({
   imports: [
@@ -25,12 +28,26 @@ import { validateEnv } from './env.validation';
       autoLoadEntities: true,
       synchronize: false,
     }),
+    BullModule.forRootAsync({
+      imports: [ConfigModule],
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => ({
+        connection: {
+          host: config.get('REDIS_HOST'),
+          port: config.get<number>('REDIS_PORT'),
+          password: config.get('REDIS_PASSWORD'),
+          maxRetriesPerRequest: null,   // ← обязательно, иначе BullMQ упадёт
+        },
+      }),
+    }),
     // глобальный лимит по умолчанию: не больше 20 запросов с одного IP за 60 сек
     ThrottlerModule.forRoot([{ ttl: 60_000, limit: 20 }]),
     ScheduleModule.forRoot(),
     AuthModule,
     CronModule,
     BuisnesModule,
+    NotificationsModule,
+    RedisModule
   ],
   providers: [
     // вешаем ThrottlerGuard на ВСЕ роуты приложения

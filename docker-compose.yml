@@ -20,6 +20,13 @@ services:
     command: redis-server --save 20 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     volumes:
       - cache:/data
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: always
+    container_name: mailpit
+    ports:
+      - '1025:1025'   # SMTP — сюда стучится nodemailer
+      - '8025:8025'   # веб-морда — сюда стучишься ты браузером
 
 volumes:
   postgres_data:

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AuthEntity } from 'src/auth/entities/auth.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { BuisnesEntity } from './entities/buisnes.entity';
@@ -16,11 +16,15 @@ import { DateTime } from 'luxon';
 import { addMinutes, dayWeek, toMin, toStr } from 'src/utils/utils';
 import Redis from 'ioredis';
 import { CreateBookingDto } from './dto/create-booking.dto';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
 
 @Injectable()
 export class BuisnesService {
+  private readonly logger = new Logger(BuisnesService.name)
   constructor(
     @Inject('REDIS') private readonly redis: Redis,
+    @InjectQueue('emails') private readonly emailsQueue: Queue,
     private readonly authService: AuthService,
     private readonly dataSource: DataSource,
     @InjectRepository(BuisnesEntity)
@@ -271,16 +275,28 @@ export class BuisnesService {
           ends_at: end,
           client_name: body.client_name,
           client_phone: body.client_phone,
+          client_email: body.client_email,
         });
       });
 
       await this.invalidateAvailability(body.master_id, start)
+
+       try {
+        await this.queue(result, "booking-created")
+        const msUntilReminder = result.starts_at.getTime() - 60 * 60 * 1000
+        const delay = msUntilReminder - Date.now()
+        if (delay > 0) await this.reminder(result, msUntilReminder)
+      } catch (e) {
+        this.logger.error(`Не удалось поставить письмо в очередь для брони ${result.id}`, e);
+      }
+
       if (idemRedisKey) {
         await this.redis.set(idemRedisKey, JSON.stringify(result), 'EX', 60);
       }
       return result
 
     } catch (e: any) {
+      
       if (idemRedisKey) {
         await this.redis.del(idemRedisKey);
       }
@@ -306,7 +322,56 @@ export class BuisnesService {
       throw new BadRequestException(`Bookings cannot be cancelled less than ${cancellationDeadlineHours} hours before the start time`);
     }
     const result = await this.bookingRepo.save({ ...booking, status: "cancelled" })
+      try {
+        await this.emailsQueue.remove(`booking-remainder_${booking_id}`);
+      } catch (e) {
+        this.logger.error(`Не удалось снять напоминание для брони ${booking_id}`, e);
+      }
     await this.invalidateAvailability(booking.master_id, booking.starts_at)
+    try {
+        await this.queue(result, "booking-cancelled")
+      } catch (e) {
+        this.logger.error(`Не удалось поставить письмо в очередь для брони ${result.id}`, e);
+      }
     return result
+  }
+
+  async queue (result:BookingEntity, event: 'booking-created' | 'booking-cancelled') {
+    try {
+        await this.emailsQueue.add(
+          event,
+          { bookingId: result.id },
+          {
+            jobId: `${event}_${result.id}`,   // дедупликация
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: 100,
+            removeOnFail: 1000,
+          },
+        );
+      } catch (e) {
+        // очередь недоступна — бронь всё равно создана, не роняем 201
+        this.logger.error(`Failed to enqueue email for booking ${result.id}`, e);
+      }
+  }
+
+  async reminder(result:BookingEntity, delay:number) {
+    try {
+        await this.emailsQueue.add(
+          'booking-remainder',
+          { bookingId: result.id },
+          {
+            jobId: `booking-remainder_${result.id}`,
+            delay,
+            attempts: 5,
+            backoff: { type: 'exponential', delay: 2000 },
+            removeOnComplete: 100,
+            removeOnFail: 1000,
+          },
+        );
+      } catch (e) {
+        // очередь недоступна — бронь всё равно создана, не роняем 201
+        this.logger.error(`Failed to enqueue email for booking ${result.id}`, e);
+      }
   }
 }
