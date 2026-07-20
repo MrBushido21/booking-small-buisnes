@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { getQueueToken } from '@nestjs/bullmq';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { BuisnesService } from './buisnes.service';
@@ -25,6 +26,7 @@ describe('BuisnesService', () => {
   let servicesRepo: { find: jest.Mock; save: jest.Mock; findOne: jest.Mock };
   let bookingRepo: { find: jest.Mock; findOne: jest.Mock; save: jest.Mock };
   let redis: { get: jest.Mock; set: jest.Mock; del: jest.Mock; keys: jest.Mock };
+  let emailsQueue: { add: jest.Mock; remove: jest.Mock };
 
   // то, что вернёт проверка пересечения внутри транзакции createBooking.
   // null = слот свободен. Тесты переопределяют, когда нужен конфликт.
@@ -65,10 +67,17 @@ describe('BuisnesService', () => {
       keys: jest.fn().mockResolvedValue([]),
     };
 
+    // очередь писем: сервис только кладёт/снимает задачи, воркер тестируется отдельно
+    emailsQueue = {
+      add: jest.fn().mockResolvedValue({ id: 'job-1' }),
+      remove: jest.fn().mockResolvedValue(1),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         BuisnesService,
         { provide: 'REDIS', useValue: redis },
+        { provide: getQueueToken('emails'), useValue: emailsQueue },
         { provide: AuthService, useValue: authService },
         { provide: DataSource, useValue: dataSource },
         { provide: getRepositoryToken(BuisnesEntity), useValue: buisnesRepo },
@@ -611,6 +620,122 @@ describe('BuisnesService', () => {
       await service.cancellBooking('b-1', 'owner-1');
 
       expect(redis.del).toHaveBeenCalledWith(`avail:master-1:${day}:s1`);
+    });
+  });
+
+  // ===========================================================================
+  // Очередь писем (BullMQ): сервис только ставит и снимает задачи.
+  // Само письмо отправляет воркер — он тестируется в notifications.processor.spec.ts.
+  // ===========================================================================
+  describe('очередь писем', () => {
+    const bookingBody = (starts_at: string) => ({
+      master_id: 'master-1',
+      service_id: 's1',
+      starts_at: starts_at as unknown as Date,
+      client_name: 'Иван',
+      client_phone: '+380000000000',
+    });
+
+    // фиксируем «сейчас», иначе delay не проверить точным равенством
+    const freezeAt = (iso: string) => jest.useFakeTimers().setSystemTime(new Date(iso));
+
+    beforeEach(() => {
+      servicesRepo.findOne.mockResolvedValue(svc);
+      masterRepo.findOne.mockResolvedValue(makeMaster(allWeek('09:00', '18:00')));
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    describe('создание брони', () => {
+      it('ставит задачу booking-created с jobId по id брони', async () => {
+        freezeAt('2030-06-10T09:00:00Z');
+
+        await service.createBooking(bookingBody('2030-06-10T14:00:00Z'), '');
+
+        expect(emailsQueue.add).toHaveBeenCalledWith(
+          'booking-created',
+          { bookingId: 'booking-1' },
+          // jobId — дедупликация: повторная постановка той же задачи не создаст дубль письма
+          expect.objectContaining({ jobId: 'booking-created_booking-1' }),
+        );
+      });
+
+      it('ставит напоминание за час до начала — delay относительный, а не timestamp', async () => {
+        freezeAt('2030-06-10T09:00:00Z');
+
+        // бронь в 14:00 → напомнить в 13:00 → ждать от «сейчас» (09:00) ровно 4 часа
+        await service.createBooking(bookingBody('2030-06-10T14:00:00Z'), '');
+
+        const reminder = emailsQueue.add.mock.calls.find((c) => c[0] === 'booking-remainder');
+        expect(reminder).toBeDefined();
+        expect(reminder![2]).toMatchObject({
+          jobId: 'booking-remainder_booking-1',
+          delay: 4 * 60 * 60 * 1000,
+        });
+      });
+
+      it('до брони меньше часа → напоминание не ставится', async () => {
+        freezeAt('2030-06-10T09:30:00Z');
+
+        // бронь в 10:00: момент напоминания (09:00) уже прошёл → delay отрицательный
+        await service.createBooking(bookingBody('2030-06-10T10:00:00Z'), '');
+
+        const names = emailsQueue.add.mock.calls.map((c) => c[0]);
+        expect(names).toEqual(['booking-created']);
+      });
+
+      it('очередь недоступна → бронь всё равно создаётся', async () => {
+        freezeAt('2030-06-10T09:00:00Z');
+        emailsQueue.add.mockRejectedValue(new Error('Redis is down'));
+
+        // письмо — не причина терять бронь: клиент уже записан, 201 не роняем
+        await expect(
+          service.createBooking(bookingBody('2030-06-10T14:00:00Z'), ''),
+        ).resolves.toMatchObject({ id: 'booking-1' });
+      });
+    });
+
+    describe('отмена брони', () => {
+      const cancelled = () => ({
+        id: 'b-1',
+        master_id: 'master-1',
+        starts_at: new Date(Date.now() + 48 * 60 * 60 * 1000),
+        status: 'confirmed',
+        master: { buisnes: { owner_id: 'owner-1', cancellationDeadlineHours: 3 } },
+      });
+
+      it('снимает напоминание из очереди', async () => {
+        bookingRepo.findOne.mockResolvedValue(cancelled());
+
+        await service.cancellBooking('b-1', 'owner-1');
+
+        // иначе клиенту придёт напоминание о брони, которой больше нет
+        expect(emailsQueue.remove).toHaveBeenCalledWith('booking-remainder_b-1');
+      });
+
+      it('ставит задачу booking-cancelled', async () => {
+        bookingRepo.findOne.mockResolvedValue(cancelled());
+
+        await service.cancellBooking('b-1', 'owner-1');
+
+        expect(emailsQueue.add).toHaveBeenCalledWith(
+          'booking-cancelled',
+          { bookingId: 'b-1' },
+          expect.objectContaining({ jobId: 'booking-cancelled_b-1' }),
+        );
+      });
+
+      it('очередь недоступна → отмена всё равно проходит', async () => {
+        bookingRepo.findOne.mockResolvedValue(cancelled());
+        emailsQueue.remove.mockRejectedValue(new Error('Redis is down'));
+        emailsQueue.add.mockRejectedValue(new Error('Redis is down'));
+
+        await expect(service.cancellBooking('b-1', 'owner-1')).resolves.toMatchObject({
+          status: 'cancelled',
+        });
+      });
     });
   });
 });

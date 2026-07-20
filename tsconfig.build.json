@@ -1,4 +1,7 @@
 {
   "extends": "./tsconfig.json",
-  "exclude": ["node_modules", "test", "dist", "**/*spec.ts"]
+  // scripts обязателен в списке: race-demo.ts лежит вне src, из-за него общий корень
+  // сборки уезжает в корень проекта и всё компилится в dist/src/** вместо dist/**,
+  // ломая `node dist/main`
+  "exclude": ["node_modules", "test", "dist", "scripts", "**/*spec.ts"]
 }

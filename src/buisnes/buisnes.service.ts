@@ -283,9 +283,11 @@ export class BuisnesService {
 
        try {
         await this.queue(result, "booking-created")
-        const msUntilReminder = result.starts_at.getTime() - 60 * 60 * 1000
-        const delay = msUntilReminder - Date.now()
-        if (delay > 0) await this.reminder(result, msUntilReminder)
+        // remindAt — момент напоминания (за час до брони), delay — сколько ждать от «сейчас».
+        // BullMQ ждёт именно относительные мс, абсолютный timestamp = отправка через ~56 лет.
+        const remindAt = result.starts_at.getTime() - 60 * 60 * 1000
+        const delay = remindAt - Date.now()
+        if (delay > 0) await this.reminder(result, delay)
       } catch (e) {
         this.logger.error(`Не удалось поставить письмо в очередь для брони ${result.id}`, e);
       }

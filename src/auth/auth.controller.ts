@@ -8,6 +8,7 @@ import {
   ApiUnauthorizedResponse,
   ApiConflictResponse,
   ApiBadRequestResponse,
+  ApiHeader,
 } from '@nestjs/swagger';
 import type {Request, Response } from 'express';
 import { Throttle } from '@nestjs/throttler';
@@ -40,7 +41,7 @@ export class AuthController {
   @ApiCreatedResponse({ description: 'Пользователь создан, возвращается accessToken' })
   @ApiConflictResponse({ description: 'Пользователь с таким email уже существует' })
   async registration(
-    @Body() body: CreateAuthDto,
+    @Body() body: CreateAuthDto, 
     @Res() res: Response
   ) {
     const { accessToken, refreshToken } = await this.authService.create(body);
@@ -93,7 +94,7 @@ export class AuthController {
     // link отдаём только для dev (письма пока нет); в проде это поле стоит убрать
     return { message: 'Если такой email существует, на него отправлена ссылка для сброса пароля', link };
   }
-
+ 
   @Patch('change-forgotten-password')
   @ApiOperation({ summary: 'Установка нового пароля по токену из письма' })
   @ApiCreatedResponse({ description: 'Пароль сброшен, возвращается accessToken' })

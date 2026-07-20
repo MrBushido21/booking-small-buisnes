@@ -1,98 +1,115 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Booking API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Бэкенд для салонов красоты: владелец заводит салон, услуги и мастеров, клиент смотрит свободные слоты и записывается, мастер видит свои записи. На почту уходят подтверждения и напоминание за час до визита.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Стек: NestJS 11, Postgres 16, Redis, BullMQ, TypeORM.
 
-## Description
+## Что внутри
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+- **Роли.** Владелец (`owner`) заводит салон, услуги и мастеров; мастер (`master`) управляет только своим расписанием.
+- **Свободные слоты** считаются на лету из расписания мастера и существующих броней, с шагом 15 минут. Ответ кэшируется в Redis на 60 секунд и сбрасывается при создании или отмене брони.
+- **Таймзоны.** В БД всё лежит в UTC (`timestamptz`), рабочие часы сравниваются в таймзоне салона — салон в Киеве и салон в Варшаве могут жить в одной базе.
+- **Защита от двойной брони** сделана на уровне БД: транзакция с `pessimistic_write` на мастере плюс EXCLUDE-constraint. Два одновременных запроса на один слот → один `201`, второй `409`. Проверяется в e2e и в `scripts/race-demo.ts`.
+- **Идемпотентность.** `POST /buisnes/booking` принимает заголовок `Idempotency-Key`: повтор с тем же ключом не создаст вторую бронь.
+- **Письма** отправляет воркер BullMQ, а не сам HTTP-запрос: упавший SMTP не роняет бронь. Напоминание ставится с задержкой до «за час до визита» и снимается при отмене.
+- **Rate limit** — 20 запросов в минуту с IP по умолчанию, 5/мин на вход и на бронь, 3/мин на восстановление пароля.
 
-## Project setup
+## Быстрый старт
+
+Нужен Docker.
 
 ```bash
-$ npm install
+cp .env.example .env      # заполни секреты; JWT-секреты сгенерируй — см. комментарий в файле
+docker compose up --build
 ```
 
-## Compile and run the project
+Поднимется всё: Postgres, Redis, mailpit, разовый прогон миграций и само приложение.
+
+- API — http://localhost:3000
+- Swagger — http://localhost:3000/docs
+- Почта (mailpit ловит все письма) — http://localhost:8025
+- Проба живости — http://localhost:3000/health
+
+### Локальная разработка (приложение на хосте)
 
 ```bash
-# development
-$ npm run start
-
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+docker compose up -d postgres redis mailpit   # только зависимости
+npm install
+npm run migration:run
+npm run dev
 ```
 
-## Run tests
+В `.env` при этом `POSTGRES_HOST=localhost`, `REDIS_HOST=localhost`, `SMTP_HOST=localhost`.
+
+## Тесты
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm test          # юнит: моки вместо БД, миллисекунды
+npm run test:e2e  # e2e: настоящее приложение, Postgres и Redis
 ```
 
-## Deployment
+Юнит-тесты проверяют логику в изоляции, e2e — то, что моком не проверишь: реальную валидацию DTO, HTTP-статусы, гонку за слот, задачи в очереди. Тест на гонку печатает строку вида `[RACE] статусы двух одновременных броней: 201, 409`.
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+E2E требуют поднятых Postgres и Redis (`docker compose up -d postgres redis`) и `.env` в корне. Данные за собой убирают.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+## Миграции
+
+Схема создаётся только миграциями, `synchronize` выключен.
 
 ```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
+npm run migration:generate src/migrations/ИмяМиграции   # сгенерировать по изменениям в сущностях
+npm run migration:run                                   # накатить (из исходников, ts-node)
+npm run migration:revert                                # откатить последнюю
 ```
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+В Docker миграции накатывает отдельный сервис `migrate`: он выполняет `npm run migration:run:prod` и завершается, и только после этого стартует `app` (`condition: service_completed_successfully`). Так сделано намеренно: если гнать миграции на старте приложения, при нескольких репликах они начнут накатываться параллельно.
 
-## Resources
+## Переменные окружения
 
-Check out a few resources that may come in handy when working with NestJS:
+Полный список с комментариями — в [`.env.example`](.env.example). Значения проверяются на старте (`src/env.validation.ts`): не хватает переменной или JWT-секрет короче 16 символов — приложение не поднимется.
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+`.env` не коммитится и в Docker-образ не попадает (см. `.dockerignore`) — секреты приходят в контейнер через `env_file`.
 
-## Support
+## Структура
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+```
+src/
+  auth/           регистрация, вход, JWT, refresh, сброс пароля
+  buisnes/        салоны, услуги, мастера, слоты, брони
+  notifications/  BullMQ-воркер и отправка почты
+  health/         GET /health — проба Postgres и Redis
+  common/         Redis, фильтр ошибок, конфиг загрузок
+  guard/          JwtAuthGuard
+  migrations/     миграции TypeORM
+scripts/
+  race-demo.ts    демонстрация защиты от гонки на уровне БД
+test/             e2e-тесты
+```
 
-## Stay in touch
+## Основные эндпоинты
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Полное описание — в Swagger на `/docs`.
 
-## License
+| Метод | Путь | Кто | Что делает |
+|---|---|---|---|
+| POST | `/auth/registration` | все | регистрация владельца |
+| POST | `/auth/login` | все | вход |
+| POST | `/buisnes` | owner | создать салон |
+| POST | `/buisnes/services` | owner | создать услугу |
+| POST | `/buisnes/upload` | owner | загрузить фото, вернёт `{ url }` |
+| POST | `/buisnes/masters` | owner | создать мастера |
+| POST | `/buisnes/login` | master | вход мастера |
+| POST | `/buisnes/week` | master | задать своё расписание |
+| GET | `/buisnes/slots` | все | свободные слоты на день |
+| POST | `/buisnes/booking` | все | записаться |
+| GET | `/buisnes/master/booking` | master | свои записи на 30 дней |
+| PATCH | `/buisnes/booking/:id/cancel` | owner | отменить бронь |
+| GET | `/health` | все | состояние зависимостей |
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+## Фоновые задачи
+
+- Чистка протухших refresh-токенов — раз в час.
+- Перевод прошедших броней в `completed` — раз в 10 минут.
+- Письма (создание, отмена, напоминание за час) — воркер очереди `emails`.
+
+Загруженные фото лежат в `uploads/` (в Docker — именованный том) и отдаются по `/uploads/<имя>`.

@@ -11,6 +11,7 @@ import { validateEnv } from './env.validation';
 import { BullModule } from '@nestjs/bullmq';
 import { NotificationsModule } from './notifications/notifications.module';
 import { RedisModule } from './common/redis.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -47,7 +48,8 @@ import { RedisModule } from './common/redis.module';
     CronModule,
     BuisnesModule,
     NotificationsModule,
-    RedisModule
+    RedisModule,
+    HealthModule
   ],
   providers: [
     // вешаем ThrottlerGuard на ВСЕ роуты приложения

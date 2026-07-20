@@ -4,6 +4,8 @@ import 'dotenv/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
+import { getQueueToken } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
 import { AppModule } from '../src/app.module';
@@ -40,6 +42,11 @@ describe('Buisnes: слоты и брони (e2e)', () => {
   // день брони: +14 дней от сегодня. Салон в UTC → local == UTC, считать проще.
   const day = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const at = (hhmm: string) => `${day}T${hhmm}:00.000Z`;
+
+  // второй день: рабочие часы 09:00–13:00 первого дня разбираются тестами броней
+  // до последнего слота, а тестам очереди нужен свободный. Проще взять отдельный день.
+  const day2 = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const at2 = (hhmm: string) => `${day2}T${hhmm}:00.000Z`;
 
   // рабочее время на все дни недели — тест не зависит от того, на какой день выпало +14
   const allWeek = (open: string, close: string) =>
@@ -350,6 +357,70 @@ describe('Buisnes: слоты и брони (e2e)', () => {
         .query({ master_id: masterId, date: day, service_id: serviceId })
         .expect(200);
       expect(slots.body).toContain('10:00');
+    });
+  });
+
+  // ===========================================================================
+  // Очередь писем: тут настоящий Redis и настоящий BullMQ. Юнит проверяет, что
+  // сервис зовёт add() с нужными аргументами; здесь — что задача реально легла
+  // в Redis и её видно снаружи.
+  // ===========================================================================
+  describe('Очередь писем (BullMQ)', () => {
+    let emailsQueue: Queue;
+    let bookingId: string;
+    const slot = at2('09:00');
+
+    beforeAll(async () => {
+      emailsQueue = app.get<Queue>(getQueueToken('emails'));
+
+      const res = await request(app.getHttpServer())
+        .post('/buisnes/booking')
+        .send(booking(slot))
+        .expect(201);
+      bookingId = res.body.id;
+    });
+
+    afterAll(async () => {
+      // не оставляем за собой задачи в общем Redis
+      for (const name of ['booking-created', 'booking-cancelled', 'booking-remainder']) {
+        await emailsQueue.remove(`${name}_${bookingId}`).catch(() => undefined);
+      }
+    });
+
+    it('создали бронь → в очереди есть задача booking-created', async () => {
+      const job = await emailsQueue.getJob(`booking-created_${bookingId}`);
+
+      expect(job).toBeDefined();
+      expect(job!.data).toEqual({ bookingId });
+    });
+
+    it('создали бронь → напоминание отложено ровно на «за час до начала»', async () => {
+      const job = await emailsQueue.getJob(`booking-remainder_${bookingId}`);
+      expect(job).toBeDefined();
+
+      // delay у BullMQ — сколько ждать ОТ МОМЕНТА ПОСТАНОВКИ, а не абсолютное время.
+      // Если сюда попадёт timestamp, письмо уедет на десятки лет вперёд и никто не заметит.
+      const expected = new Date(slot).getTime() - 60 * 60 * 1000 - Date.now();
+      expect(job!.opts.delay).toBeGreaterThan(expected - 60_000);
+      expect(job!.opts.delay).toBeLessThan(expected + 60_000);
+    });
+
+    it('отменили бронь → напоминание снято из очереди', async () => {
+      await request(app.getHttpServer())
+        .patch(`/buisnes/booking/${bookingId}/cancel`)
+        .set('Authorization', `Bearer ${ownerToken}`)
+        .expect(200);
+
+      // иначе клиент получит напоминание о брони, которой уже нет
+      const reminder = await emailsQueue.getJob(`booking-remainder_${bookingId}`);
+      expect(reminder).toBeUndefined();
+    });
+
+    it('отменили бронь → поставлена задача booking-cancelled', async () => {
+      const job = await emailsQueue.getJob(`booking-cancelled_${bookingId}`);
+
+      expect(job).toBeDefined();
+      expect(job!.data).toEqual({ bookingId });
     });
   });
 });

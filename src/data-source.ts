@@ -20,6 +20,9 @@ export default new DataSource({
   password: process.env.POSTGRES_PASSWORD,
   database: process.env.POSTGRES_DB,
   entities: [AuthEntity, RefreshTokenEntity, ResetTokenEntity, BuisnesEntity, ServicesEntity, MasterEntity, BookingEntity],
-  migrations: ['src/migrations/*.ts'],
+  // относительно ЭТОГО файла, а не cwd, и с обоими расширениями:
+  // из исходников (ts-node) подхватятся src/migrations/*.ts,
+  // из собранного образа (node dist/data-source.js) — dist/migrations/*.js
+  migrations: [__dirname + '/migrations/*{.ts,.js}'],
   synchronize: false,
 });

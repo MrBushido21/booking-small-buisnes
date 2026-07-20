@@ -11,6 +11,14 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # -U/-d обязательны: без них pg_isready проверяет коннект под пользователем root,
+      # которого в базе нет
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
 
   redis:
     image: redis:6.2-alpine
@@ -20,6 +28,16 @@ services:
     command: redis-server --save 20 1 --loglevel warning --requirepass ${REDIS_PASSWORD}
     volumes:
       - cache:/data
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    healthcheck:
+      # redis поднят с requirepass — без -a вернётся NOAUTH и проба будет вечно красной
+      test: ['CMD-SHELL', 'redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   mailpit:
     image: axllent/mailpit:latest
     restart: always
@@ -28,7 +46,63 @@ services:
       - '1025:1025'   # SMTP — сюда стучится nodemailer
       - '8025:8025'   # веб-морда — сюда стучишься ты браузером
 
+  # Миграции — отдельным шагом, а не на старте приложения.
+  # Если гнать их из main.ts, то при нескольких репликах инстансы начнут
+  # накатывать одну и ту же миграцию одновременно. Тут разовый контейнер:
+  # отработал, вышел с кодом 0 — и только после этого поднимается app.
+  migrate:
+    build:
+      context: .
+      target: runtime
+    command: ['npm', 'run', 'migration:run:prod']
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  app:
+    build:
+      context: .
+      target: runtime
+    restart: always
+    ports:
+      - '${PORT:-3000}:3000'
+    env_file: .env
+    environment:
+      # имена сервисов compose вместо localhost: внутри контейнера
+      # localhost — это он сам, а не хост с базой
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      PORT: 3000
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        # ждём не «стартовал», а «успешно завершился»: подниматься на несхемленной
+        # базе бессмысленно — приложение упадёт на первом же запросе
+        condition: service_completed_successfully
+    volumes:
+      # загрузки должны переживать пересборку образа
+      - uploads:/app/uploads
+    healthcheck:
+      test: ['CMD-SHELL', 'node -e "fetch(''http://127.0.0.1:3000/health'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
 volumes:
   postgres_data:
+  uploads:
   cache:
     driver: local
